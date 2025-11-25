@@ -13,7 +13,6 @@ from transformers import GPT2LMHeadModel, GPT2Tokenizer
 import matplotlib.pyplot as plt
 import numpy as np
 from typing import Dict, List
-import types
 
 
 class DepthProbe:
@@ -27,7 +26,7 @@ class DepthProbe:
     def register_hooks(self):
         """Register forward hooks on all transformer blocks."""
         # GPT-2 has blocks in model.transformer.h
-        if not hasattr(self.model, 'transformer') or not hasattr(self.model.transformer, 'h'):
+        if not hasattr(self.model, "transformer") or not hasattr(self.model.transformer, "h"):
             raise ValueError("Could not find transformer blocks in GPT-2 model")
         
         blocks = self.model.transformer.h
@@ -48,7 +47,7 @@ class DepthProbe:
         
         # Hook on block input (h_l) - capture before any processing
         def input_hook(module, input):
-            self.activations[f'h_{layer_idx}'] = input[0].detach().clone()
+            self.activations[f"h_{layer_idx}"] = input[0].detach().clone()
         
         handle1 = block.register_forward_pre_hook(input_hook)
         self.hooks.append(handle1)
@@ -65,14 +64,14 @@ class DepthProbe:
                 attn_output = output[0]
             else:
                 attn_output = output
-            self.activations[f'a_{layer_idx}'] = attn_output.detach().clone()
+            self.activations[f"a_{layer_idx}"] = attn_output.detach().clone()
         
         handle2 = attn_module.register_forward_hook(attn_hook)
         self.hooks.append(handle2)
         
         # Hook on MLP output (m_l)
         def mlp_hook(module, input, output):
-            self.activations[f'm_{layer_idx}'] = output.detach().clone()
+            self.activations[f"m_{layer_idx}"] = output.detach().clone()
         
         handle3 = mlp_module.register_forward_hook(mlp_hook)
         self.hooks.append(handle3)
@@ -113,8 +112,12 @@ def mnist_to_text_sequence(image: torch.Tensor, num_bins: int = 16) -> str:
     return sequence
 
 
-def preprocess_mnist_batch(images: torch.Tensor, tokenizer: GPT2Tokenizer, 
-                           max_length: int = 1024, num_bins: int = 16) -> Dict[str, torch.Tensor]:
+def preprocess_mnist_batch(
+    images: torch.Tensor,
+    tokenizer: GPT2Tokenizer,
+    max_length: int = 1024,
+    num_bins: int = 16,
+) -> Dict[str, torch.Tensor]:
     """
     Convert batch of MNIST images to tokenized sequences.
     
@@ -132,7 +135,7 @@ def preprocess_mnist_batch(images: torch.Tensor, tokenizer: GPT2Tokenizer,
         padding=True,
         truncation=True,
         max_length=max_length,
-        return_tensors='pt'
+        return_tensors="pt",
     )
     
     return tokenized
@@ -146,15 +149,15 @@ def compute_metrics(probe: DepthProbe, num_layers: int) -> Dict[str, List[float]
     3. Cosine similarity: (h_l • u_l) / (||h_l|| * ||u_l||)
     """
     metrics = {
-        'l2_norm': [],
-        'relative_contribution': [],
-        'cosine_similarity': []
+        "l2_norm": [],
+        "relative_contribution": [],
+        "cosine_similarity": [],
     }
     
     for l in range(num_layers):
-        h_l = probe.activations.get(f'h_{l}')
-        a_l = probe.activations.get(f'a_{l}')
-        m_l = probe.activations.get(f'm_{l}')
+        h_l = probe.activations.get(f"h_{l}")
+        a_l = probe.activations.get(f"a_{l}")
+        m_l = probe.activations.get(f"m_{l}")
         
         if h_l is None:
             continue
@@ -162,7 +165,7 @@ def compute_metrics(probe: DepthProbe, num_layers: int) -> Dict[str, List[float]
         # (1) Residual L2 norm
         # GPT-2 activations: [batch, seq_len, hidden_dim]
         l2_norm = torch.norm(h_l, p=2, dim=-1).mean().item()
-        metrics['l2_norm'].append(l2_norm)
+        metrics["l2_norm"].append(l2_norm)
         
         if a_l is not None and m_l is not None:
             # Ensure shapes match
@@ -178,143 +181,149 @@ def compute_metrics(probe: DepthProbe, num_layers: int) -> Dict[str, List[float]
             u_l = a_l + m_l
             
             # (2) Relative contribution: ||u_l|| / ||h_l||
-            # Compute L2 norm along last dimension (hidden dim)
-            u_norm = torch.norm(u_l, p=2, dim=-1)  # Shape: [batch, seq_len]
-            h_norm = torch.norm(h_l, p=2, dim=-1)  # Shape: [batch, seq_len]
+            u_norm = torch.norm(u_l, p=2, dim=-1)  # [batch, seq_len]
+            h_norm = torch.norm(h_l, p=2, dim=-1)  # [batch, seq_len]
             rel_contrib = (u_norm / (h_norm + 1e-8)).mean().item()
-            metrics['relative_contribution'].append(rel_contrib)
+            metrics["relative_contribution"].append(rel_contrib)
             
-            # (3) Cosine similarity: (h_l • u_l) / (||h_l|| * ||u_l||)
-            # Compute dot product along last dimension
-            dot_product = (h_l * u_l).sum(dim=-1)  # Shape: [batch, seq_len]
+            # (3) Cosine similarity
+            dot_product = (h_l * u_l).sum(dim=-1)  # [batch, seq_len]
             cosine_per_element = dot_product / ((h_norm * u_norm) + 1e-8)
             cosine = cosine_per_element.mean().item()
-            metrics['cosine_similarity'].append(cosine)
+            metrics["cosine_similarity"].append(cosine)
         else:
-            # If a_l or m_l not captured, append NaN
-            metrics['relative_contribution'].append(np.nan)
-            metrics['cosine_similarity'].append(np.nan)
+            metrics["relative_contribution"].append(np.nan)
+            metrics["cosine_similarity"].append(np.nan)
     
     return metrics
 
 
-def compute_layer_skipping(model: nn.Module, input_ids: torch.Tensor, 
-                          attention_mask: torch.Tensor, num_layers: int) -> List[float]:
+def compute_layer_skipping_accuracy(
+    model: nn.Module,
+    input_ids: torch.Tensor,
+    attention_mask: torch.Tensor,
+    num_layers: int,
+) -> List[float]:
     """
-    Compute KL divergence for each skipped layer.
-    For each layer s, temporarily bypass block s (h_{s+1} = h_s) and compute KL divergence.
+    Compute accuracy when each transformer block is skipped.
+    Accuracy is measured as the fraction of samples where the top predicted token
+    matches the original model's top prediction.
     """
     model.eval()
-    device = input_ids.device
-    
-    # Get original logits
+    blocks = model.transformer.h
+
+    # 1. Get original predictions
     with torch.no_grad():
         outputs = model(input_ids=input_ids, attention_mask=attention_mask)
-        original_logits = outputs.logits  # [batch, seq_len, vocab_size]
-        # Use last token logits for comparison
-        original_logits_last = original_logits[:, -1, :]  # [batch, vocab_size]
-        original_probs = F.softmax(original_logits_last, dim=-1)
-    
-    kl_divs = []
-    
-    # Find blocks
-    blocks = model.transformer.h
-    
-    # Store original forward functions
-    original_forwards = []
-    for block in blocks:
-        original_forwards.append(block.forward)
-    
+        original_logits = outputs.logits[:, -1, :]  # [batch, vocab_size]
+        original_preds = original_logits.argmax(dim=-1)  # [batch]
+
+    accuracies = []
+
+    print(f"Computing layer skipping accuracy for {num_layers} layers...")
+
     for s in range(num_layers):
-        # Temporarily replace forward method with identity function
-        # GPT-2 block forward signature: (hidden_states, layer_past=None, attention_mask=None, ...)
-        def identity_forward(self, hidden_states, **kwargs):
-            # Return tuple matching GPT-2 block output: (hidden_states, present)
-            return (hidden_states, None)
-        
-        blocks[s].forward = types.MethodType(identity_forward, blocks[s])
-        
-        # Compute logits with skipped layer
+        original_block = blocks[s]
+
+        # Skip Block: identity function
+        class SkipBlock(nn.Module):
+            def __init__(self):
+                super().__init__()
+
+            def forward(self, hidden_states, *args, **kwargs):
+                # match HF output structure: return (hidden_states, present)
+                present = None
+                return hidden_states, present
+
+        # patch the block
+        blocks[s] = SkipBlock()
+
+        # run forward with layer skipped
         with torch.no_grad():
-            outputs = model(input_ids=input_ids, attention_mask=attention_mask)
-            skipped_logits = outputs.logits
-            skipped_logits_last = skipped_logits[:, -1, :]
-        
-        # Compute KL divergence: KL(skipped || original)
-        kl_div = F.kl_div(
-            F.log_softmax(skipped_logits_last, dim=-1),
-            original_probs,
-            reduction='batchmean'
-        ).item()
-        kl_divs.append(kl_div)
-        
-        # Restore original forward
-        blocks[s].forward = original_forwards[s]
-    
-    return kl_divs
+            out = model(input_ids=input_ids, attention_mask=attention_mask)
+            skipped_logits = out.logits[:, -1, :]  # [batch, vocab_size]
+            skipped_preds = skipped_logits.argmax(dim=-1)  # [batch]
+
+        # Compute accuracy: fraction of matching predictions
+        matches = (skipped_preds == original_preds).float()
+        accuracy = matches.mean().item()
+        accuracies.append(accuracy)
+
+        print(f"  skipped layer {s}, accuracy={accuracy:.4f}")
+
+        # restore original block
+        blocks[s] = original_block
+
+    print(f"Layer skipping complete: {len(accuracies)} accuracy values")
+    return accuracies
 
 
-def plot_metrics(metrics: Dict[str, List[float]], kl_divs: List[float], num_layers: int):
+
+def plot_metrics(metrics: Dict[str, List[float]], accuracies: List[float], num_layers: int):
     """Plot all four metrics vs layer index."""
     fig, axes = plt.subplots(2, 2, figsize=(12, 10))
-    fig.suptitle('Depth Probe Metrics: GPT-2 small on MNIST', fontsize=14)
+    fig.suptitle("Depth Probe Metrics: GPT-2 small on MNIST", fontsize=14)
     
     # Use actual length of metrics to handle cases where some layers might be missing
-    actual_num_layers = len(metrics['l2_norm'])
+    actual_num_layers = len(metrics["l2_norm"])
     layer_indices = list(range(actual_num_layers))
     
     # (1) Residual L2 norm
-    if metrics['l2_norm']:
-        axes[0, 0].plot(layer_indices, metrics['l2_norm'], 'o-', color='blue')
-    axes[0, 0].set_xlabel('Layer Index')
-    axes[0, 0].set_ylabel('Residual L2 Norm ||h_l||_2')
-    axes[0, 0].set_title('(1) Residual L2 Norm')
+    if metrics["l2_norm"]:
+        axes[0, 0].plot(layer_indices, metrics["l2_norm"], "o-", color="blue", markersize=6, linewidth=2)
+    axes[0, 0].set_xlabel("Layer Index")
+    axes[0, 0].set_ylabel("Residual L2 Norm ||h_l||_2")
+    axes[0, 0].set_title("(1) Residual L2 Norm")
     axes[0, 0].grid(True, alpha=0.3)
     
     # (2) Relative contribution (filter out NaN values)
-    rel_contrib = [x for x in metrics['relative_contribution'] if not np.isnan(x)]
-    rel_indices = [i for i, x in enumerate(metrics['relative_contribution']) if not np.isnan(x)]
+    rel_contrib = [x for x in metrics["relative_contribution"] if not np.isnan(x)]
+    rel_indices = [i for i, x in enumerate(metrics["relative_contribution"]) if not np.isnan(x)]
     if rel_contrib:
-        axes[0, 1].plot(rel_indices, rel_contrib, 'o-', color='green')
-    axes[0, 1].set_xlabel('Layer Index')
-    axes[0, 1].set_ylabel('Relative Contribution ||u_l|| / ||h_l||')
-    axes[0, 1].set_title('(2) Relative Contribution')
+        axes[0, 1].plot(rel_indices, rel_contrib, "o-", color="green", markersize=6, linewidth=2)
+    axes[0, 1].set_xlabel("Layer Index")
+    axes[0, 1].set_ylabel("Relative Contribution ||u_l|| / ||h_l||")
+    axes[0, 1].set_title("(2) Relative Contribution")
     axes[0, 1].grid(True, alpha=0.3)
     
     # (3) Cosine similarity (filter out NaN values)
-    cosine_sim = [x for x in metrics['cosine_similarity'] if not np.isnan(x)]
-    cosine_indices = [i for i, x in enumerate(metrics['cosine_similarity']) if not np.isnan(x)]
+    cosine_sim = [x for x in metrics["cosine_similarity"] if not np.isnan(x)]
+    cosine_indices = [i for i, x in enumerate(metrics["cosine_similarity"]) if not np.isnan(x)]
     if cosine_sim:
-        axes[1, 0].plot(cosine_indices, cosine_sim, 'o-', color='red')
-    axes[1, 0].set_xlabel('Layer Index')
-    axes[1, 0].set_ylabel('Cosine Similarity')
-    axes[1, 0].set_title('(3) Cosine Similarity (h_l • u_l) / (||h_l|| * ||u_l||)')
+        axes[1, 0].plot(cosine_indices, cosine_sim, "o-", color="red", markersize=6, linewidth=2)
+    axes[1, 0].set_xlabel("Layer Index")
+    axes[1, 0].set_ylabel("Cosine Similarity")
+    axes[1, 0].set_title("(3) Cosine Similarity (h_l • u_l) / (||h_l|| * ||u_l||)")
     axes[1, 0].grid(True, alpha=0.3)
     
-    # (4) Layer skipping (KL divergence)
-    if kl_divs:
-        kl_indices = list(range(len(kl_divs)))
-        axes[1, 1].plot(kl_indices, kl_divs, 'o-', color='purple')
-    axes[1, 1].set_xlabel('Layer Index (skipped)')
-    axes[1, 1].set_ylabel('KL Divergence')
-    axes[1, 1].set_title('(4) Layer Skipping: KL Divergence')
+    # (4) Layer skipping (Accuracy)
+    if accuracies and len(accuracies) > 0:
+        acc_indices = list(range(len(accuracies)))
+        axes[1, 1].plot(acc_indices, accuracies, "o-", color="purple", markersize=6, linewidth=2)
+        print(f"Layer skipping: plotted {len(accuracies)} accuracy points")
+    else:
+        print("Warning: No layer skipping data to plot")
+    axes[1, 1].set_xlabel("Layer Index (skipped)")
+    axes[1, 1].set_ylabel("Accuracy")
+    axes[1, 1].set_title("(4) Layer Skipping: Prediction Accuracy")
     axes[1, 1].grid(True, alpha=0.3)
+    axes[1, 1].set_ylim([0, 1.1])
     
     plt.tight_layout()
-    plt.savefig('depth_probe_gpt2_metrics.png', dpi=150, bbox_inches='tight')
+    plt.savefig("depth_probe_gpt2_metrics.png", dpi=150, bbox_inches="tight")
     print("Plot saved as 'depth_probe_gpt2_metrics.png'")
     plt.show()
 
 
 def main():
     """Main function to run depth probe analysis."""
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     
     # Load pretrained GPT-2 small (do NOT train)
     print("Loading pretrained GPT-2 small...")
-    model = GPT2LMHeadModel.from_pretrained('gpt2')
-    tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
+    model = GPT2LMHeadModel.from_pretrained("gpt2")
+    tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
     model = model.to(device)
     model.eval()
     
@@ -329,10 +338,10 @@ def main():
     ])
     
     mnist_dataset = datasets.MNIST(
-        root='./data',
+        root="./data",
         train=False,  # Use test set
         download=True,
-        transform=transform
+        transform=transform,
     )
     
     # Create a small batch for speed
@@ -343,8 +352,8 @@ def main():
     # Convert MNIST images to tokenized sequences
     print("Converting MNIST images to text sequences...")
     tokenized = preprocess_mnist_batch(images, tokenizer, max_length=1024, num_bins=16)
-    input_ids = tokenized['input_ids'].to(device)
-    attention_mask = tokenized['attention_mask'].to(device)
+    input_ids = tokenized["input_ids"].to(device)
+    attention_mask = tokenized["attention_mask"].to(device)
     
     print(f"Input shape: {input_ids.shape}")
     print(f"Sample sequence length: {input_ids.shape[1]} tokens")
@@ -365,25 +374,25 @@ def main():
     metrics = compute_metrics(probe, num_layers)
     
     print(f"Computed metrics for {len(metrics['l2_norm'])} layers")
-    if len(metrics['l2_norm']) == 0:
+    if len(metrics["l2_norm"]) == 0:
         print("Warning: No metrics computed. Check if hooks are capturing activations correctly.")
         return
     
-    # Compute layer skipping KL divergence
-    print("Computing layer skipping KL divergence...")
+    # Compute layer skipping accuracy
+    print("Computing layer skipping accuracy...")
     try:
-        kl_divs = compute_layer_skipping(model, input_ids, attention_mask, num_layers)
+        accuracies = compute_layer_skipping_accuracy(model, input_ids, attention_mask, num_layers)
     except Exception as e:
-        print(f"Error computing layer skipping: {e}")
+        print(f"Error computing layer skipping accuracy: {e}")
         print("Continuing without layer skipping metrics...")
         import traceback
         traceback.print_exc()
-        kl_divs = []
+        accuracies = []
     
     # Plot results
     print("Plotting results...")
     try:
-        plot_metrics(metrics, kl_divs, num_layers)
+        plot_metrics(metrics, accuracies, num_layers)
     except Exception as e:
         print(f"Error plotting metrics: {e}")
         import traceback
@@ -395,6 +404,5 @@ def main():
     print("Analysis complete!")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
-
