@@ -198,34 +198,33 @@ def compute_metrics(probe: DepthProbe, num_layers: int) -> Dict[str, List[float]
     return metrics
 
 
-def compute_layer_skipping_accuracy(
+def compute_layer_skipping(
     model: nn.Module,
     input_ids: torch.Tensor,
     attention_mask: torch.Tensor,
     num_layers: int,
 ) -> List[float]:
     """
-    Compute accuracy when each transformer block is skipped.
-    Accuracy is measured as the fraction of samples where the top predicted token
-    matches the original model's top prediction.
+    Skip each transformer block by replacing it with an identity-like block.
+    Uses a universal forward signature (*args, **kwargs) to avoid signature conflicts.
     """
     model.eval()
     blocks = model.transformer.h
 
-    # 1. Get original predictions
+    # 1. Compute original distribution
     with torch.no_grad():
         outputs = model(input_ids=input_ids, attention_mask=attention_mask)
-        original_logits = outputs.logits[:, -1, :]  # [batch, vocab_size]
-        original_preds = original_logits.argmax(dim=-1)  # [batch]
+        original_logits = outputs.logits[:, -1, :]
+        original_probs = F.softmax(original_logits, dim=-1)
 
-    accuracies = []
+    kl_divs = []
 
-    print(f"Computing layer skipping accuracy for {num_layers} layers...")
+    print(f"Computing layer skipping for {num_layers} layers...")
 
     for s in range(num_layers):
         original_block = blocks[s]
 
-        # Skip Block: identity function
+        # Safe Skip Block: absorbs EVERYTHING
         class SkipBlock(nn.Module):
             def __init__(self):
                 super().__init__()
@@ -241,25 +240,26 @@ def compute_layer_skipping_accuracy(
         # run forward with layer skipped
         with torch.no_grad():
             out = model(input_ids=input_ids, attention_mask=attention_mask)
-            skipped_logits = out.logits[:, -1, :]  # [batch, vocab_size]
-            skipped_preds = skipped_logits.argmax(dim=-1)  # [batch]
+            skipped_logits = out.logits[:, -1, :]
 
-        # Compute accuracy: fraction of matching predictions
-        matches = (skipped_preds == original_preds).float()
-        accuracy = matches.mean().item()
-        accuracies.append(accuracy)
+        kl = F.kl_div(
+            F.log_softmax(skipped_logits, dim=-1),
+            original_probs,
+            reduction="batchmean",
+        ).item()
+        kl_divs.append(kl)
 
-        print(f"  skipped layer {s}, accuracy={accuracy:.4f}")
+        print(f"  skipped layer {s}, KL={kl:.6f}")
 
         # restore original block
         blocks[s] = original_block
 
-    print(f"Layer skipping complete: {len(accuracies)} accuracy values")
-    return accuracies
+    print(f"Layer skipping complete: {len(kl_divs)} KL values")
+    return kl_divs
 
 
 
-def plot_metrics(metrics: Dict[str, List[float]], accuracies: List[float], num_layers: int):
+def plot_metrics(metrics: Dict[str, List[float]], kl_divs: List[float], num_layers: int):
     """Plot all four metrics vs layer index."""
     fig, axes = plt.subplots(2, 2, figsize=(12, 10))
     fig.suptitle("Depth Probe Metrics: GPT-2 small on MNIST", fontsize=14)
@@ -296,18 +296,17 @@ def plot_metrics(metrics: Dict[str, List[float]], accuracies: List[float], num_l
     axes[1, 0].set_title("(3) Cosine Similarity (h_l • u_l) / (||h_l|| * ||u_l||)")
     axes[1, 0].grid(True, alpha=0.3)
     
-    # (4) Layer skipping (Accuracy)
-    if accuracies and len(accuracies) > 0:
-        acc_indices = list(range(len(accuracies)))
-        axes[1, 1].plot(acc_indices, accuracies, "o-", color="purple", markersize=6, linewidth=2)
-        print(f"Layer skipping: plotted {len(accuracies)} accuracy points")
+    # (4) Layer skipping (KL divergence)
+    if kl_divs and len(kl_divs) > 0:
+        kl_indices = list(range(len(kl_divs)))
+        axes[1, 1].plot(kl_indices, kl_divs, "o-", color="purple", markersize=6, linewidth=2)
+        print(f"Layer skipping: plotted {len(kl_divs)} points")
     else:
         print("Warning: No layer skipping data to plot")
     axes[1, 1].set_xlabel("Layer Index (skipped)")
-    axes[1, 1].set_ylabel("Accuracy")
-    axes[1, 1].set_title("(4) Layer Skipping: Prediction Accuracy")
+    axes[1, 1].set_ylabel("KL Divergence")
+    axes[1, 1].set_title("(4) Layer Skipping: KL Divergence")
     axes[1, 1].grid(True, alpha=0.3)
-    axes[1, 1].set_ylim([0, 1.1])
     
     plt.tight_layout()
     plt.savefig("depth_probe_gpt2_metrics.png", dpi=150, bbox_inches="tight")
@@ -378,21 +377,21 @@ def main():
         print("Warning: No metrics computed. Check if hooks are capturing activations correctly.")
         return
     
-    # Compute layer skipping accuracy
-    print("Computing layer skipping accuracy...")
+    # Compute layer skipping KL divergence
+    print("Computing layer skipping KL divergence...")
     try:
-        accuracies = compute_layer_skipping_accuracy(model, input_ids, attention_mask, num_layers)
+        kl_divs = compute_layer_skipping(model, input_ids, attention_mask, num_layers)
     except Exception as e:
-        print(f"Error computing layer skipping accuracy: {e}")
+        print(f"Error computing layer skipping: {e}")
         print("Continuing without layer skipping metrics...")
         import traceback
         traceback.print_exc()
-        accuracies = []
+        kl_divs = []
     
     # Plot results
     print("Plotting results...")
     try:
-        plot_metrics(metrics, accuracies, num_layers)
+        plot_metrics(metrics, kl_divs, num_layers)
     except Exception as e:
         print(f"Error plotting metrics: {e}")
         import traceback
