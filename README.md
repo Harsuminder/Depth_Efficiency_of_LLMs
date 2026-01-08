@@ -84,7 +84,7 @@ Results are saved as PNG files in the respective directories.
 
 The depth probing analysis reveals several consistent patterns across the experiments:
 
-- Across nine experiments and three transformer architectures, depth usage is not a universal property of transformers — it depends strongly on the model architecture.
+- Across nine experiments and three transformer architectures, depth usage is not a universal property of transformers. It depends strongly on the model architecture.
   - **Encoders** make substantial use of depth.
   - **Decoder-only** models show very limited depth utilization.
   - **Encoder–decoder** models fall in between.
